@@ -180,6 +180,7 @@ typedef enum _GST_PYLONSRC_PROP
 
   PROP_CONFIGFILE,
   PROP_IGNOREDEFAULTS,
+  PROP_SERIALNUMBER,
 
   PROP_NUM_PROPERTIES           // Yes, there is PROP_0 that represent nothing, so actually there are (PROP_NUMPROPS - 1) properties.
       // But this way you can intuitively access propFlags[] by index
@@ -363,6 +364,7 @@ ascii_strdown (gchar * *str, gssize len)
 #define DEFAULT_PROP_FRAMETRANSDELAY                  0
 #define DEFAULT_PROP_BANDWIDTHRESERVE                 10
 #define DEFAULT_PROP_BANDWIDTHRESERVEACC              10
+#define DEFAULT_PROP_SERIALNUMBER                     ""
 
 /* pad templates */
 static GstStaticPadTemplate gst_pylonsrc_src_template =
@@ -777,6 +779,11 @@ gst_pylonsrc_class_init (GstPylonSrcClass * klass)
           "For situations when the network connection becomes unstable. A larger number of packet resends may be needed to transmit an image",
           1, 32, DEFAULT_PROP_BANDWIDTHRESERVEACC,
           (GParamFlags) (G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS)));     //TODO: Limits may be co-dependent on other transport layer parameters.
+  g_object_class_install_property (gobject_class, PROP_SERIALNUMBER,
+    g_param_spec_string ("serial-number", "serial number of device",
+        "(Number) Camera ID defined in device FW. ",
+         DEFAULT_PROP_SERIALNUMBER,
+        (GParamFlags) (G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS)));  
 }
 
 static gboolean
@@ -790,6 +797,7 @@ static void
 gst_pylonsrc_init (GstPylonSrc * src)
 {
   GST_DEBUG_OBJECT (src, "Initialising defaults");
+  src->serialNumber=g_strdup (DEFAULT_PROP_SERIALNUMBER);
 
   src->deviceConnected = FALSE;
   src->acquisition_configured = FALSE;
@@ -1214,6 +1222,9 @@ gst_pylonsrc_set_property (GObject * object, guint property_id,
     case PROP_BANDWIDTHRESERVEACC:
       src->bandwidthReserveAcc = g_value_get_int (value);
       break;
+    case PROP_SERIALNUMBER:
+      src->serialNumber = g_value_dup_string (value);
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, property_id, pspec);
       return;
@@ -1448,6 +1459,9 @@ gst_pylonsrc_get_property (GObject * object, guint property_id,
       break;
     case PROP_BANDWIDTHRESERVEACC:
       g_value_set_int (value, src->bandwidthReserveAcc);
+      break;
+    case PROP_SERIALNUMBER:
+      g_value_set_string (value, src->serialNumber);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, property_id, pspec);
@@ -1723,12 +1737,61 @@ error:
   return FALSE;
 }
 
+//Gets the device index from the serial number set in the element
+//returns -1 if not defined and -2 if not found //TODO: implement enum or defines
+static gint gst_pylonc_search_serial_number_device(GstPylonSrc * src){
+  size_t numDevices=0;
+  gint found_index=-1;
+  GENAPIC_RESULT res;
+  PylonDeviceInfo_t device_info;
+
+
+  //Serialnumber not defined, return -
+  if(g_strcmp0(src->serialNumber,"")==0){
+    return -1;//no serial number defined
+  }
+
+  //get device numbers
+  res=PylonEnumerateDevices (&numDevices);
+  //PYLONC_CHECK_ERROR (src, res);
+
+  //search for serialnumber
+  for (int dev_index=0;dev_index<numDevices;dev_index++){
+    PylonGetDeviceInfo (dev_index, &device_info);
+    //PYLONC_CHECK_ERROR (src, res);
+
+    if(g_strcmp0(device_info.SerialNumber,src->serialNumber)==0){
+      found_index=dev_index;
+    }
+  }
+
+  return found_index;
+} 
+
 static gboolean
 gst_pylonsrc_select_device (GstPylonSrc * src)
 {
   int i;
   size_t numDevices;
   GENAPIC_RESULT res;
+  gint device_index_found_by_serialno=-1;
+  GST_DEBUG_OBJECT (src, "src: start searching for serial no: % s",src->serialNumber);
+
+  device_index_found_by_serialno=gst_pylonc_search_serial_number_device(src);
+  GST_WARNING_OBJECT (src, "src: found serial no: % s for index % i",src->serialNumber,device_index_found_by_serialno);
+
+  if(device_index_found_by_serialno==-2){
+    GST_DEBUG_OBJECT (src, "src: no element found with serialnumber %s.", src->serialNumber);
+    goto error;
+  }
+  else if(device_index_found_by_serialno==-1){
+    GST_DEBUG_OBJECT (src, "src: no serialnumber specified, loading by camera index.");
+  }
+  else{
+    src->cameraId=device_index_found_by_serialno;
+    return TRUE;
+  }
+
 
   res = PylonEnumerateDevices (&numDevices);
   PYLONC_CHECK_ERROR (src, res);
