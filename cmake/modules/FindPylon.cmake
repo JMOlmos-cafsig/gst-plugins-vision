@@ -12,7 +12,7 @@
 
 if (NOT PYLON_DIR)
   if (WIN32)
-    set (_PYLON_DIR "C:/Program Files/Basler/pylon")
+    set (_PYLON_DIR "C:/Program Files/Basler/pylon 5")
   else ()
     set (_PYLON_DIR "/opt/pylon")
   endif ()
